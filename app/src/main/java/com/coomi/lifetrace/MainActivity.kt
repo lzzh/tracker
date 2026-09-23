@@ -157,15 +157,23 @@ fun RangeButton(label: String, range: QueryRange, current: QueryRange, onSelect:
 @Composable
 fun MapViewCompose(points: List<com.coomi.lifetrace.data.TrackPoint>) {
     val context = LocalContext.current
+    // MapView 在 factory 里创建（此时组件树已挂载，MapView 初始化完成），
+    // 避免在 remember 初始化块中对尚未 attach 的 MapView 调用 setZoom/setCenter 触发潜在 NPE。
     val mapView = remember {
         MapView(context).apply {
             setTileSource(TileSourceFactory.MAPNIK)
             setMultiTouchControls(true)
-            controller.setZoom(14.0)
-            if (points.isNotEmpty()) {
-                controller.setCenter(GeoPoint(points.first().latitude, points.first().longitude))
-            }
         }
+    }
+    // 首次挂载后统一设置缩放与中心
+    LaunchedEffect(Unit) {
+        if (points.isNotEmpty()) {
+            mapView.controller.setZoom(14.0)
+            mapView.controller.setCenter(GeoPoint(points.first().latitude, points.first().longitude))
+        } else {
+            mapView.controller.setZoom(6.0)
+        }
+        mapView.invalidate()
     }
     AndroidView(
         factory = { mapView },
@@ -179,7 +187,7 @@ fun MapViewCompose(points: List<com.coomi.lifetrace.data.TrackPoint>) {
                     outlinePaint.strokeWidth = 8f
                 }
                 mv.overlays.add(line)
-                // 起点终点标记
+                // 起点/终点标记
                 val start = Marker(mv).apply {
                     position = GeoPoint(points.first().latitude, points.first().longitude)
                     setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
