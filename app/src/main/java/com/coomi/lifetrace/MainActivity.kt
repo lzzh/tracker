@@ -82,6 +82,9 @@ fun MainScreen(vm: MainViewModel = viewModel()) {
             TopAppBar(
                 title = { Text("一生足迹") },
                 actions = {
+                    IconButton(onClick = { showSettings = true }) {
+                        Icon(Icons.Default.Settings, contentDescription = "设置")
+                    }
                     IconButton(onClick = {
                         val sync = WebDavSync(context)
                         if (sync.isConfigured()) {
@@ -169,7 +172,10 @@ fun ColumnScope.MapViewCompose(points: List<com.coomi.lifetrace.data.TrackPoint>
     // 避免在 remember 初始化块中对尚未 attach 的 MapView 调用 setZoom/setCenter 触发潜在 NPE。
     val mapView = remember {
         MapView(context).apply {
-            setTileSource(TileSourceFactory.MAPNIK)
+            // 使用国内可访问的高德瓦片源，避免默认 OSM 在国内超时导致地图空白
+            val amap = org.osmdroid.config.Configuration.getInstance()
+                .mapTileSources.getTileSource("amap")
+            setTileSource(amap ?: TileSourceFactory.MAPNIK)
             setMultiTouchControls(true)
         }
     }
