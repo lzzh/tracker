@@ -101,34 +101,40 @@ fun MainScreen() {
     val mapRef = remember { mutableStateOf<org.osmdroid.views.MapView?>(null) }
     var showSearch by remember { mutableStateOf(false) }
 
-    // --- 权限：Android 11+ 要求先请求前台定位，再单独二次请求后台定位 ---
+    // --- 完整权限流：前台定位 →(11+)后台定位 →(13+)通知 → 忽略电池优化 → 启动 ---
+    val notifLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        // 通知权限回来（13+），继续检查是否能启动
+        if (granted) requestIgnoreBattery(context)
+        // 通知权限是可选增强，无论授予与否都尝试启动（后台保活主要靠前台定位权限）
+        startTrackingIfReady(context, vm)
+    }
+
     val bgLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { result ->
-        // 无论后台是否授权，拿到前台权限就启动记录（后台拿不到只影响保活）
-        if (result.values.all { it }) {
-            requestIgnoreBattery(context)
-        }
-        startTracking(context, vm)
+        // 后台定位回来，继续请求通知权限（13+）
+        if (result.values.all { it }) requestIgnoreBattery(context)
+        requestNotifIfNeeded(context, vm, notifLauncher)
     }
 
     val permLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { result ->
         val allGranted = result.values.all { it }
-        if (allGranted) {
-            requestIgnoreBattery(context)
-            // 二次请求后台定位权限（Android 11+ 必须单独弹窗）
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                val bgGranted = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_BACKGROUND_LOCATION) == PackageManager.PERMISSION_GRANTED
-                if (!bgGranted) {
-                    bgLauncher.launch(arrayOf(Manifest.permission.ACCESS_BACKGROUND_LOCATION))
-                    return@rememberLauncherForActivityResult
-                }
-            }
-            startTracking(context, vm)
-        } else {
+        if (!allGranted) {
             Toast.makeText(context, "需要定位权限才能记录轨迹", Toast.LENGTH_LONG).show()
+            return@rememberLauncherForActivityResult
+        }
+        requestIgnoreBattery(context)
+        // 前台定位已拿到，Android 11+ 单独二次请求后台定位
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_BACKGROUND_LOCATION) != PackageManager.PERMISSION_GRANTED
+        ) {
+            bgLauncher.launch(arrayOf(Manifest.permission.ACCESS_BACKGROUND_LOCATION))
+        } else {
+            requestNotifIfNeeded(context, vm, notifLauncher)
         }
     }
 
@@ -136,11 +142,11 @@ fun MainScreen() {
         vm.refreshCount()
         vm.loadTrackingState()
         vm.load(currentRange)
-        // 打开软件自动开始记录（若用户开启且已获得定位权限）
+        // 打开软件自动开始记录：完整检查权限链，缺哪个弹哪个，全部就绪才启动
         val auto = context.getSharedPreferences("lifetrace", Context.MODE_PRIVATE)
             .getBoolean("auto_start", true)
         if (auto && !vm.tracking.value) {
-            requestAndStart(context, vm, permLauncher)
+            requestTrackingChain(context, vm, permLauncher, bgLauncher, notifLauncher)
         }
     }
 
@@ -254,7 +260,7 @@ fun MainScreen() {
                         vm.setTracking(false)
                         Toast.makeText(context, "已停止记录", Toast.LENGTH_SHORT).show()
                     } else {
-                        requestAndStart(context, vm, permLauncher)
+                        requestTrackingChain(context, vm, permLauncher, bgLauncher, notifLauncher)
                         Toast.makeText(context, "开始记录轨迹", Toast.LENGTH_SHORT).show()
                     }
                 },
@@ -395,17 +401,18 @@ fun MapViewCompose(points: List<TrackPoint>, fitAll: Boolean, tileKey: String, m
                     outlinePaint.strokeWidth = 8f
                 }
                 mv.overlays.add(line)
+                // 起点/终点用小红点标记，避免启动图标过大
                 val start = Marker(mv).apply {
                     position = GeoPoint(points.first().latitude, points.first().longitude)
-                    setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+                    setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
                     title = "起点"
-                    icon = context.getDrawable(R.drawable.ic_launcher_foreground)
+                    icon = context.getDrawable(R.drawable.ic_marker_point)
                 }
                 val end = Marker(mv).apply {
                     position = GeoPoint(points.last().latitude, points.last().longitude)
-                    setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+                    setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
                     title = "终点"
-                    icon = context.getDrawable(R.drawable.ic_launcher_foreground)
+                    icon = context.getDrawable(R.drawable.ic_marker_point)
                 }
                 mv.overlays.add(start)
                 mv.overlays.add(end)
@@ -426,24 +433,73 @@ fun MapViewCompose(points: List<TrackPoint>, fitAll: Boolean, tileKey: String, m
 private fun hasAll(context: Context, perms: Array<String>): Boolean =
     perms.all { ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED }
 
-/** 前台 + 后台定位权限都已拿到才直接启动；否则弹前台权限框 */
-private fun requestAndStart(
+/**
+ * 启动轨迹所需的完整权限链检查：缺哪个就弹哪个（Android 11+ 后台定位须单独弹），
+ * 全部就绪才真正 startTracking。
+ */
+private fun requestTrackingChain(
     context: Context,
     vm: MainViewModel,
-    launcher: androidx.activity.result.ActivityResultLauncher<Array<String>>
+    fgLauncher: androidx.activity.result.ActivityResultLauncher<Array<String>>,
+    bgLauncher: androidx.activity.result.ActivityResultLauncher<Array<String>>,
+    notifLauncher: androidx.activity.result.ActivityResultLauncher<String>
 ) {
     val fg = arrayOf(
         Manifest.permission.ACCESS_FINE_LOCATION,
         Manifest.permission.ACCESS_COARSE_LOCATION
     )
-    val bgNeeded = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
-            ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_BACKGROUND_LOCATION) != PackageManager.PERMISSION_GRANTED
-    val need = if (bgNeeded) fg + Manifest.permission.ACCESS_BACKGROUND_LOCATION else fg
-    if (hasAll(context, fg)) {
-        startTracking(context, vm)
-    } else {
-        launcher.launch(fg)
+    // 1) 前台定位未授予 → 弹前台定位
+    if (!hasAll(context, fg)) {
+        fgLauncher.launch(fg)
+        return
     }
+    // 2) 前台已授予，Android 11+ 后台定位未授予 → 单独弹后台定位
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+        ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_BACKGROUND_LOCATION) != PackageManager.PERMISSION_GRANTED
+    ) {
+        bgLauncher.launch(arrayOf(Manifest.permission.ACCESS_BACKGROUND_LOCATION))
+        return
+    }
+    // 3) 定位都齐了，Android 13+ 通知权限未授予 → 弹通知
+    if (Build.VERSION.SDK_INT >= 33 &&
+        ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+    ) {
+        notifLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        return
+    }
+    // 4) 全部就绪 → 忽略电池优化 + 启动
+    requestIgnoreBattery(context)
+    startTracking(context, vm)
+}
+
+/** Android 13+ 通知权限未授予且需要时弹窗（定位已齐），否则直接启动 */
+private fun requestNotifIfNeeded(
+    context: Context,
+    vm: MainViewModel,
+    notifLauncher: androidx.activity.result.ActivityResultLauncher<String>
+) {
+    if (Build.VERSION.SDK_INT >= 33 &&
+        ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+    ) {
+        notifLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+    } else {
+        requestIgnoreBattery(context)
+        startTracking(context, vm)
+    }
+}
+
+/** 后台定位/通知都处理完后，若定位权限齐了就启动 */
+private fun startTrackingIfReady(context: Context, vm: MainViewModel) {
+    val fg = arrayOf(
+        Manifest.permission.ACCESS_FINE_LOCATION,
+        Manifest.permission.ACCESS_COARSE_LOCATION
+    )
+    if (!hasAll(context, fg)) {
+        Toast.makeText(context, "定位权限未授予，无法记录轨迹", Toast.LENGTH_LONG).show()
+        return
+    }
+    requestIgnoreBattery(context)
+    startTracking(context, vm)
 }
 
 /** 真正启动轨迹服务并更新状态 */
