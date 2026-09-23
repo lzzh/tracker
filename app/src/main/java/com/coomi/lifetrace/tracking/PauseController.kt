@@ -3,6 +3,7 @@ package com.coomi.lifetrace.tracking
 import android.content.Context
 import android.location.Location
 import android.net.wifi.WifiManager
+import com.coomi.lifetrace.data.PlaceStore
 import kotlin.math.abs
 
 /**
@@ -16,6 +17,7 @@ import kotlin.math.abs
 class PauseController(private val context: Context) {
 
     private val prefs = context.getSharedPreferences("lifetrace", Context.MODE_PRIVATE)
+    private val placeStore = PlaceStore(context.applicationContext)
 
     // ---- 规则 1：静止停留 ----
     private var lastLat = 0.0
@@ -27,11 +29,9 @@ class PauseController(private val context: Context) {
     /** 两点间视为"静止"的位移阈值（米） */
     private val STILL_DIST_M = 5.0
 
-    // ---- 规则 2：地点范围 ----
+    // ---- 规则 2：常去地点范围（多个） ----
     private fun zoneEnabled() = prefs.getBoolean("pause_zone_enabled", false)
-    private fun zoneLat() = prefs.getFloat("pause_zone_lat", 0f).toDouble()
-    private fun zoneLon() = prefs.getFloat("pause_zone_lon", 0f).toDouble()
-    private fun zoneRadius() = prefs.getFloat("pause_zone_radius", 200f).toDouble()
+    private fun zones() = placeStore.all()
 
     // ---- 规则 3：WiFi ----
     private fun wifiEnabled() = prefs.getBoolean("pause_wifi_enabled", false)
@@ -46,11 +46,11 @@ class PauseController(private val context: Context) {
         if (wifiEnabled() && wifiTarget().isNotBlank() && isOnTargetWifi()) {
             return true
         }
-        // 规则 2：进入地点范围
+        // 规则 2：进入任意常去地点范围
         if (zoneEnabled()) {
-            val d = distanceMeters(loc.latitude, loc.longitude, zoneLat(), zoneLon())
-            if (d <= zoneRadius()) {
-                return true
+            for (z in zones()) {
+                val d = distanceMeters(loc.latitude, loc.longitude, z.lat, z.lon)
+                if (d <= z.radius) return true
             }
         }
         // 规则 1：静止停留
