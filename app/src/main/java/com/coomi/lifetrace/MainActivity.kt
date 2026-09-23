@@ -263,7 +263,7 @@ fun ColumnScope.MapViewCompose(points: List<com.coomi.lifetrace.data.TrackPoint>
             if (points.isNotEmpty()) {
                 val line = Polyline().apply {
                     setPoints(points.map { GeoPoint(it.latitude, it.longitude) })
-                    outlinePaint.color = PrimaryGreen
+                    outlinePaint.color = android.graphics.Color.parseColor("#2E7D32")
                     outlinePaint.strokeWidth = 8f
                 }
                 mv.overlays.add(line)
