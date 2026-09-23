@@ -197,8 +197,10 @@ fun MainScreen() {
         ) {
             Column {
                 Text("海拔/速度", fontSize = 11.sp, color = Color(0xFF666666))
+                // 用最新一个轨迹点的速度（实时随记录变化），避免恒为固定值
+                val lastSpeed = points.lastOrNull()?.speed?.times(3.6) ?: 0.0
                 Text(
-                    if (stats.maxSpeedKmh > 0) "%.1f km/h".format(stats.maxSpeedKmh) else "0.0 km/h",
+                    "%.1f km/h".format(lastSpeed),
                     fontSize = 13.sp, fontWeight = FontWeight.Bold, color = AccentRed
                 )
             }
@@ -381,7 +383,8 @@ fun MapViewCompose(points: List<TrackPoint>, fitAll: Boolean, tileKey: String, m
                 when (tileKey) {
                     "amap" -> LifeTraceApp.amapTileSource()
                     "osm_official" -> LifeTraceApp.osmTileSource()
-                    else -> LifeTraceApp.osmDeTileSource()   // 默认：德国 OSM 镜像（海外实测可用）
+                    "osm_de" -> LifeTraceApp.osmDeTileSource()
+                    else -> LifeTraceApp.osmFrTileSource()   // 默认：法国 OSM 镜像（实测海外可用）
                 }
             )
             setMultiTouchControls(true)
@@ -531,14 +534,30 @@ private fun exportAll(context: Context, points: List<TrackPoint>) {
         Toast.makeText(context, "没有可导出的轨迹", Toast.LENGTH_SHORT).show()
         return
     }
-    val f = GeoJsonIO.writeExportFile(context, points, "life-trace")
-    // 通过 FileProvider + ACTION_SEND 唤起分享面板
+    // 弹格式选择（CSV / GPX / GeoJSON）
+    val items = arrayOf("CSV（表格）", "GPX（地图/运动软件）", "GeoJSON")
+    android.app.AlertDialog.Builder(context)
+        .setTitle("导出格式（${points.size} 个点）")
+        .setItems(items) { _, which ->
+            val (ext, content, mime) = when (which) {
+                0 -> Triple("csv", com.coomi.lifetrace.data.ImportExport.exportCsv(points), "text/csv")
+                1 -> Triple("gpx", com.coomi.lifetrace.data.ImportExport.exportGpx(points), "application/gpx+xml")
+                else -> Triple("geojson", com.coomi.lifetrace.data.GeoJsonIO.exportGeoJson(points), "application/json")
+            }
+            val f = com.coomi.lifetrace.data.ImportExport.writeExportFile(context, points, "life-trace", ext, content)
+            shareFile(context, f, mime)
+        }
+        .show()
+}
+
+/** 通过 FileProvider + ACTION_SEND 分享文件 */
+private fun shareFile(context: Context, f: java.io.File, mime: String) {
     try {
         val uri = androidx.core.content.FileProvider.getUriForFile(
             context, context.packageName + ".fileprovider", f
         )
         val intent = Intent(Intent.ACTION_SEND).apply {
-            type = "application/json"
+            type = mime
             putExtra(Intent.EXTRA_STREAM, uri)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
@@ -548,12 +567,45 @@ private fun exportAll(context: Context, points: List<TrackPoint>) {
     }
 }
 
+/** 从 Uri 读取文件并导入轨迹（CSV/GPX/GeoJSON 自动识别），返回导入条数 */
+private suspend fun importFromUri(context: Context, uri: android.net.Uri): Int {
+    return kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        try {
+            val temp = java.io.File(context.cacheDir, "import_${System.currentTimeMillis()}")
+            context.contentResolver.openInputStream(uri)?.use { input ->
+                temp.outputStream().use { input.copyTo(it) }
+            } ?: return@withContext 0
+            val pts = com.coomi.lifetrace.data.ImportExport.importFromFile(temp)
+            temp.delete()
+            if (pts.isEmpty()) return@withContext 0
+            // 直接写库
+            val db = com.coomi.lifetrace.data.AppDatabase.get(context.applicationContext)
+            for (p in pts) db.trackDao().insert(p)
+            pts.size
+        } catch (e: Exception) {
+            0
+        }
+    }
+}
+
 /** 设置页：WebDAV 配置 + 常去地点管理 + 省电暂停 + 自动开始 */
 @Composable
 fun SettingsDialog(onDismiss: () -> Unit, onAddPlace: (Double, Double, Double, String) -> Unit, points: List<TrackPoint>, onTileChange: (String) -> Unit) {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("lifetrace", Context.MODE_PRIVATE) }
     val syncScope = rememberCoroutineScope()
+
+    // 导入文件选择器：选 CSV/GPX/GeoJSON 文件导入轨迹
+    val importLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        syncScope.launch {
+            val n = importFromUri(context, uri)
+            val msg = if (n > 0) "已导入 $n 个轨迹点" else "导入失败或文件为空"
+            Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+        }
+    }
 
     var webdavUrl by remember { mutableStateOf(prefs.getString("webdav_url", "") ?: "") }
     var webdavUser by remember { mutableStateOf(prefs.getString("webdav_user", "") ?: "") }
@@ -585,7 +637,7 @@ fun SettingsDialog(onDismiss: () -> Unit, onAddPlace: (Double, Double, Double, S
                 Spacer(Modifier.height(10.dp))
                 Text("地图源", fontWeight = FontWeight.Bold, color = AccentRed)
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    listOf("osm" to "OSM德国", "osm_official" to "OSM官方", "amap" to "高德").forEach { (key, label) ->
+                    listOf("osm" to "OSM法国", "osm_de" to "OSM德国", "osm_official" to "OSM官方", "amap" to "高德").forEach { (key, label) ->
                         val sel = mapTile == key
                         Text(
                             label,
@@ -632,6 +684,13 @@ fun SettingsDialog(onDismiss: () -> Unit, onAddPlace: (Double, Double, Double, S
                         }
                     }
                 }) { Text("立即同步", color = AccentRed) }
+
+                // ---- 数据导入 ----
+                Spacer(Modifier.height(16.dp))
+                Text("数据导入", fontWeight = FontWeight.Bold, color = AccentRed)
+                TextButton(onClick = {
+                    importLauncher.launch(arrayOf("text/*", "application/json", "application/gpx+xml", "*/*"))
+                }) { Text("从文件导入（CSV / GPX / GeoJSON）", color = AccentRed) }
 
                 // ---- 常去地点 ----
                 Spacer(Modifier.height(16.dp))

@@ -61,6 +61,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** 导入外部轨迹点（CSV/GPX/GeoJSON），返回导入条数 */
+    suspend fun importPoints(points: List<TrackPoint>): Int {
+        return withContext(Dispatchers.IO) {
+            for (p in points) dao.insert(p)
+            refreshCount()
+            points.size
+        }
+    }
+
     fun refreshCount() {
         viewModelScope.launch { _totalCount.value = dao.count() }
     }
