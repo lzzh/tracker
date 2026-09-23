@@ -7,7 +7,6 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
-import android.os.Environment
 import android.os.PowerManager
 import android.provider.Settings
 import android.widget.Toast
@@ -15,8 +14,12 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.*
 import androidx.compose.material.icons.Icons
@@ -24,31 +27,54 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.compose.foundation.layout.ColumnScope
-import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
-import androidx.core.content.FileProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.coomi.lifetrace.data.GeoJsonIO
 import com.coomi.lifetrace.sync.WebDavSync
 import com.coomi.lifetrace.tracking.LocationTrackingService
-import org.osmdroid.tileprovider.tilesource.TileSourceFactory
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.MapView
 import org.osmdroid.views.overlay.Polyline
 import org.osmdroid.views.overlay.Marker
-import java.io.File
+
+// ---- 主题配色 ----
+val PrimaryGreen = Color(0xFF2E7D32)
+val AccentGreen = Color(0xFF66BB6A)
+val SurfaceBg = Color(0xFFF4F6F4)
+val DarkText = Color(0xFF1B2A1B)
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            MainScreen()
+            LifeTraceTheme {
+                MainScreen()
+            }
         }
     }
+}
+
+@Composable
+fun LifeTraceTheme(content: @Composable () -> Unit) {
+    MaterialTheme(
+        colors = lightColors(
+            primary = PrimaryGreen,
+            primaryVariant = AccentGreen,
+            secondary = AccentGreen,
+            background = SurfaceBg,
+            surface = Color.White,
+            onPrimary = Color.White,
+            onBackground = DarkText,
+            onSurface = DarkText
+        )
+    ) { content() }
 }
 
 @Composable
@@ -77,10 +103,21 @@ fun MainScreen(vm: MainViewModel = viewModel()) {
         vm.load(currentRange)
     }
 
+    // 顶部状态文案
+    val statusText = if (tracking) "正在记录轨迹" else "未在记录"
+
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("一生足迹") },
+                title = {
+                    Column {
+                        Text("一生足迹", fontWeight = FontWeight.Bold, fontSize = 20.sp)
+                        Text(statusText, fontSize = 12.sp, color = Color(0xCCFFFFFF))
+                    }
+                },
+                backgroundColor = PrimaryGreen,
+                contentColor = Color.White,
+                elevation = 4.dp,
                 actions = {
                     IconButton(onClick = { showSettings = true }) {
                         Icon(Icons.Default.Settings, contentDescription = "设置")
@@ -88,27 +125,26 @@ fun MainScreen(vm: MainViewModel = viewModel()) {
                     IconButton(onClick = {
                         val sync = WebDavSync(context)
                         if (sync.isConfigured()) {
-                            // 后台同步最近一段
-                            val geojson = GeoJsonIO.exportGeoJson(points)
                             Toast.makeText(context, "正在同步…", Toast.LENGTH_SHORT).show()
                         } else {
                             Toast.makeText(context, "请先配置 WebDAV（设置）", Toast.LENGTH_SHORT).show()
                         }
                     }) { Icon(Icons.Default.Cloud, contentDescription = "同步") }
-
-                    IconButton(onClick = {
-                        exportAll(context, points)
-                    }) { Icon(Icons.Default.Share, contentDescription = "导出") }
+                    IconButton(onClick = { exportAll(context, points) }) {
+                        Icon(Icons.Default.Share, contentDescription = "导出")
+                    }
                 }
             )
         },
         bottomBar = {
-            BottomAppBar {
-                RangeButton("今天", QueryRange.DAY, currentRange) { currentRange = it; vm.load(it) }
-                RangeButton("本周", QueryRange.WEEK, currentRange) { currentRange = it; vm.load(it) }
-                RangeButton("本月", QueryRange.MONTH, currentRange) { currentRange = it; vm.load(it) }
-                RangeButton("今年", QueryRange.YEAR, currentRange) { currentRange = it; vm.load(it) }
-                RangeButton("一生", QueryRange.LIFE, currentRange) { currentRange = it; vm.load(it) }
+            Surface(elevation = 8.dp) {
+                Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
+                    RangeButton("今天", QueryRange.DAY, currentRange) { currentRange = it; vm.load(it) }
+                    RangeButton("本周", QueryRange.WEEK, currentRange) { currentRange = it; vm.load(it) }
+                    RangeButton("本月", QueryRange.MONTH, currentRange) { currentRange = it; vm.load(it) }
+                    RangeButton("今年", QueryRange.YEAR, currentRange) { currentRange = it; vm.load(it) }
+                    RangeButton("一生", QueryRange.LIFE, currentRange) { currentRange = it; vm.load(it) }
+                }
             }
         },
         floatingActionButton = {
@@ -138,18 +174,43 @@ fun MainScreen(vm: MainViewModel = viewModel()) {
                     } else {
                         permLauncher.launch(allPerms)
                     }
-                }
+                },
+                backgroundColor = if (tracking) Color(0xFFC62828) else PrimaryGreen,
+                contentColor = Color.White,
+                elevation = 6.dp
             ) {
-                if (tracking) Icon(Icons.Default.Stop, contentDescription = "停止") else Icon(Icons.Default.PlayArrow, contentDescription = "开始")
+                Icon(
+                    if (tracking) Icons.Default.Stop else Icons.Default.PlayArrow,
+                    contentDescription = if (tracking) "停止" else "开始",
+                    modifier = Modifier.size(30.dp)
+                )
             }
-        }
+        },
+        backgroundColor = SurfaceBg
     ) { padding ->
         Column(Modifier.padding(padding).fillMaxSize()) {
-            MapViewCompose(points)
-            Text(
-                "${currentRange.label}：${points.size} 个点 | 总计 ${totalCount} 个点",
-                Modifier.padding(8.dp)
-            )
+            // 地图卡片
+            Card(
+                modifier = Modifier.fillMaxWidth().weight(1f).padding(8.dp),
+                elevation = 4.dp,
+                shape = RoundedCornerShape(16.dp)
+            ) {
+                Box(Modifier.fillMaxSize()) {
+                    MapViewCompose(points)
+                    // 左上角数据卡片
+                    Surface(
+                        modifier = Modifier.align(Alignment.TopStart).padding(10.dp),
+                        color = Color(0xCCFFFFFF),
+                        shape = RoundedCornerShape(10.dp),
+                        elevation = 2.dp
+                    ) {
+                        Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+                            Text("${currentRange.label}轨迹", fontWeight = FontWeight.Bold, fontSize = 13.sp, color = PrimaryGreen)
+                            Text("${points.size} 个点 · 累计 ${totalCount} 点", fontSize = 12.sp, color = DarkText)
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -160,26 +221,31 @@ fun MainScreen(vm: MainViewModel = viewModel()) {
 
 @Composable
 fun RangeButton(label: String, range: QueryRange, current: QueryRange, onSelect: (QueryRange) -> Unit) {
-    TextButton(onClick = { onSelect(range) }) {
-        Text(label, color = if (current == range) MaterialTheme.colors.primary else MaterialTheme.colors.onSurface)
+    val selected = current == range
+    Surface(
+        shape = RoundedCornerShape(20.dp),
+        color = if (selected) PrimaryGreen else Color.Transparent,
+        modifier = Modifier.clip(RoundedCornerShape(20.dp)).clickable { onSelect(range) }
+    ) {
+        Text(
+            label,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            color = if (selected) Color.White else Color(0xFF555555),
+            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+            fontSize = 14.sp
+        )
     }
 }
 
 @Composable
 fun ColumnScope.MapViewCompose(points: List<com.coomi.lifetrace.data.TrackPoint>) {
     val context = LocalContext.current
-    // MapView 在 factory 里创建（此时组件树已挂载，MapView 初始化完成），
-    // 避免在 remember 初始化块中对尚未 attach 的 MapView 调用 setZoom/setCenter 触发潜在 NPE。
     val mapView = remember {
         MapView(context).apply {
-            // 使用国内可访问的高德瓦片源，避免默认 OSM 在国内超时导致地图空白
-            val amap = org.osmdroid.config.Configuration.getInstance()
-                .mapTileSources.getTileSource("amap")
-            setTileSource(amap ?: TileSourceFactory.MAPNIK)
+            setTileSource(LifeTraceApp.amapTileSource())
             setMultiTouchControls(true)
         }
     }
-    // 首次挂载后统一设置缩放与中心
     LaunchedEffect(Unit) {
         if (points.isNotEmpty()) {
             mapView.controller.setZoom(14.0)
@@ -191,17 +257,16 @@ fun ColumnScope.MapViewCompose(points: List<com.coomi.lifetrace.data.TrackPoint>
     }
     AndroidView(
         factory = { mapView },
-        modifier = Modifier.fillMaxWidth().weight(1f),
+        modifier = Modifier.fillMaxWidth(),
         update = { mv ->
             mv.overlays.clear()
             if (points.isNotEmpty()) {
                 val line = Polyline().apply {
                     setPoints(points.map { GeoPoint(it.latitude, it.longitude) })
-                    outlinePaint.color = android.graphics.Color.parseColor("#4CAF50")
+                    outlinePaint.color = PrimaryGreen
                     outlinePaint.strokeWidth = 8f
                 }
                 mv.overlays.add(line)
-                // 起点/终点标记
                 val start = Marker(mv).apply {
                     position = GeoPoint(points.first().latitude, points.first().longitude)
                     setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
@@ -232,9 +297,7 @@ private fun requestIgnoreBattery(context: Context) {
             val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
             intent.data = Uri.parse("package:" + context.packageName)
             context.startActivity(intent)
-        } catch (e: Exception) {
-            // 部分机型不支持直接跳转，忽略
-        }
+        } catch (e: Exception) { }
     }
 }
 
@@ -262,33 +325,30 @@ fun SettingsDialog(onDismiss: () -> Unit) {
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("省电暂停设置") },
+        title = { Text("省电暂停设置", fontWeight = FontWeight.Bold) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
-                Text("规则命中时自动暂停记录以省电，离开后自动恢复。", style = MaterialTheme.typography.body2)
-
-                // ---- 地点范围 ----
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("规则命中时自动暂停记录以省电，离开后自动恢复。", style = MaterialTheme.typography.body2, color = Color(0xFF666666))
+                Spacer(Modifier.height(12.dp))
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.clickable { zoneEnabled = !zoneEnabled }) {
                     Checkbox(checked = zoneEnabled, onCheckedChange = { zoneEnabled = it })
                     Text("进入指定地点范围时暂停")
                 }
                 if (zoneEnabled) {
-                    OutlinedTextField(value = zoneLat, onValueChange = { zoneLat = it },
-                        label = { Text("纬度") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                    OutlinedTextField(value = zoneLon, onValueChange = { zoneLon = it },
-                        label = { Text("经度") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                    OutlinedTextField(value = zoneRadius, onValueChange = { zoneRadius = it },
-                        label = { Text("半径(米)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                    OutlinedTextField(value = zoneLat, onValueChange = { zoneLat = it }, label = { Text("纬度") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(value = zoneLon, onValueChange = { zoneLon = it }, label = { Text("经度") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(value = zoneRadius, onValueChange = { zoneRadius = it }, label = { Text("半径(米)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                 }
-
-                // ---- WiFi ----
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Spacer(Modifier.height(12.dp))
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.clickable { wifiEnabled = !wifiEnabled }) {
                     Checkbox(checked = wifiEnabled, onCheckedChange = { wifiEnabled = it })
                     Text("连接指定WiFi时暂停")
                 }
                 if (wifiEnabled) {
-                    OutlinedTextField(value = wifiSsid, onValueChange = { wifiSsid = it },
-                        label = { Text("WiFi SSID") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(value = wifiSsid, onValueChange = { wifiSsid = it }, label = { Text("WiFi SSID") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                 }
             }
         },
@@ -304,10 +364,8 @@ fun SettingsDialog(onDismiss: () -> Unit) {
                     .apply()
                 Toast.makeText(context, "已保存省电设置", Toast.LENGTH_SHORT).show()
                 onDismiss()
-            }) { Text("保存") }
+            }) { Text("保存", color = PrimaryGreen) }
         },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("取消") }
-        }
+        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } }
     )
 }
