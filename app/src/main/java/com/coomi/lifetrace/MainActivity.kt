@@ -177,7 +177,9 @@ fun MainScreen(vm: MainViewModel = viewModel()) {
                 },
                 backgroundColor = if (tracking) Color(0xFFC62828) else PrimaryGreen,
                 contentColor = Color.White,
-                elevation = 6.dp
+                elevation = FloatingActionButtonDefaults.elevation(
+                    defaultElevation = 6.dp, pressedElevation = 6.dp
+                )
             ) {
                 Icon(
                     if (tracking) Icons.Default.Stop else Icons.Default.PlayArrow,
@@ -238,7 +240,7 @@ fun RangeButton(label: String, range: QueryRange, current: QueryRange, onSelect:
 }
 
 @Composable
-fun ColumnScope.MapViewCompose(points: List<com.coomi.lifetrace.data.TrackPoint>) {
+fun MapViewCompose(points: List<com.coomi.lifetrace.data.TrackPoint>) {
     val context = LocalContext.current
     val mapView = remember {
         MapView(context).apply {
