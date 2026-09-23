@@ -118,8 +118,9 @@ class LocationTrackingService : Service() {
         val cb = object : LocationCallback() {
             override fun onLocationResult(result: LocationResult) {
                 val loc: Location = result.lastLocation ?: return
-                // 过滤粗定位点（accuracy>100m 说明 GPS 信号差，误差可能数百米，丢弃防跳变）
-                if (loc.accuracy > 100f) return
+                // 过滤极粗定位点（>150m 说明信号严重差，误差可能数百米）。100m 过严，
+                // 室内/弱GPS 时会被大量丢弃导致"不记录"，放宽到 150m。
+                if (loc.accuracy > 150f) return
                 // 智能暂停判定：静止 / 进指定范围 / 连上指定WiFi → 省电暂停记录
                 val shouldPause = pauseController.shouldPause(loc)
                 if (shouldPause) {
@@ -186,6 +187,7 @@ class LocationTrackingService : Service() {
 
     private fun persist(loc: Location) {
         val db = AppDatabase.get(applicationContext)
+        android.util.Log.d("LifeTrace", "记录轨迹点: lat=${loc.latitude}, lon=${loc.longitude}, acc=${loc.accuracy}")
         scope.launch {
             val pt = com.coomi.lifetrace.data.TrackPoint(
                 timestamp = loc.time,

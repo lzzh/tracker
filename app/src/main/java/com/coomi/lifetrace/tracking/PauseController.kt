@@ -29,6 +29,10 @@ class PauseController(private val context: Context) {
     private val STILL_REQUIRED = 6
     /** 两点间视为"静止"的位移阈值（米） */
     private val STILL_DIST_M = 5.0
+    /** 静止累计时长达到该值才判定为"长时间停留"→ 暂停省电（单位 ms） */
+    private val PAUSE_AFTER_MS = 3 * 60 * 1000L
+    /** 记录进入"疑似静止"的时间戳 */
+    private var stillStart = 0L
 
     // ---- 规则 2：常去地点范围（多个） ----
     private fun zoneEnabled() = prefs.getBoolean("pause_zone_enabled", false)
@@ -61,7 +65,7 @@ class PauseController(private val context: Context) {
         return false
     }
 
-    /** 静止检测：连续多条定位位移很小 */
+    /** 静止检测：连续多条定位位移很小，且累计静止时间超过阈值才判"长时间停留" */
     private fun isStill(loc: Location): Boolean {
         if (lastTime != 0L) {
             val dt = (loc.time - lastTime) / 1000.0
@@ -69,14 +73,17 @@ class PauseController(private val context: Context) {
             // 速度很小（<0.3 m/s 即约 1km/h 以下），且位移小于阈值
             if (dt > 0 && dist < STILL_DIST_M && loc.speed < 0.3f) {
                 stillCount++
+                if (stillStart == 0L) stillStart = lastTime
             } else if (dist >= STILL_DIST_M || loc.speed >= 0.3f) {
                 stillCount = 0
+                stillStart = 0L
             }
         }
         lastLat = loc.latitude
         lastLon = loc.longitude
         lastTime = loc.time
-        return stillCount >= STILL_REQUIRED
+        // 需同时满足：连续静止点数足够 + 累计静止时长 ≥ 3 分钟，才进入省电暂停
+        return stillCount >= STILL_REQUIRED && stillStart != 0L && (loc.time - stillStart) >= PAUSE_AFTER_MS
     }
 
     private fun isOnTargetWifi(): Boolean {
@@ -108,6 +115,6 @@ class PauseController(private val context: Context) {
     }
 
     fun reset() {
-        lastLat = 0.0; lastLon = 0.0; lastTime = 0L; stillCount = 0
+        lastLat = 0.0; lastLon = 0.0; lastTime = 0L; stillCount = 0; stillStart = 0L
     }
 }
