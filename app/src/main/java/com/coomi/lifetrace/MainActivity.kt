@@ -51,6 +51,7 @@ import org.osmdroid.views.MapView
 import org.osmdroid.views.overlay.Marker
 import org.osmdroid.views.overlay.Polyline
 import java.util.Calendar
+import android.app.DatePickerDialog
 
 // ---- 主题配色（参考"一生足迹"暗色地图风）----
 val AccentRed = Color(0xFFE53935)
@@ -95,6 +96,10 @@ fun MainScreen() {
     val stats by vm.stats.collectAsState()
     var currentRange by remember { mutableStateOf<QueryRange>(QueryRange.DAY) }
     var showSettings by remember { mutableStateOf(false) }
+    var tileKey by remember { mutableStateOf(context.getSharedPreferences("lifetrace", Context.MODE_PRIVATE).getString("map_tile", "osm") ?: "osm") }
+    // 地图控制器引用，供「定位」按钮将视角移到当前位置
+    val mapRef = remember { mutableStateOf<org.osmdroid.views.MapView?>(null) }
+    var showSearch by remember { mutableStateOf(false) }
 
     // --- 权限：Android 11+ 要求先请求前台定位，再单独二次请求后台定位 ---
     val bgLauncher = rememberLauncherForActivityResult(
@@ -145,7 +150,9 @@ fun MainScreen() {
         // ---- 全屏地图 ----
         MapViewCompose(
             points = points,
-            fitAll = currentRange == QueryRange.LIFE
+            fitAll = currentRange == QueryRange.LIFE,
+            tileKey = tileKey,
+            mapRef = mapRef
         )
 
         // ---- 顶部状态悬浮卡（参考图：左上角 logo + 状态）----
@@ -171,18 +178,6 @@ fun MainScreen() {
             }
         }
 
-        // ---- 右上角：设置 ----
-        IconButton(
-            onClick = { showSettings = true },
-            modifier = Modifier
-                .align(Alignment.TopEnd)
-                .padding(top = 12.dp, end = 12.dp)
-                .clip(CircleShape)
-                .background(FrostCard)
-                .size(42.dp)
-        ) {
-            Icon(Icons.Default.Settings, contentDescription = "设置", tint = AccentRed)
-        }
 
         // ---- 左侧中部：海拔/速度卡 ----
         Row(
@@ -214,12 +209,12 @@ fun MainScreen() {
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             FloatAction(Icons.Default.MyLocation, "定位") {
-                Toast.makeText(context, "定位已居中", Toast.LENGTH_SHORT).show()
+                locateToCurrent(context, mapRef)
             }
             FloatAction(Icons.Default.Settings, "配置") { showSettings = true }
             FloatAction(Icons.Default.Share, "导出") { exportAll(context, points) }
             FloatAction(Icons.Default.Search, "搜索") {
-                Toast.makeText(context, "搜索地点（待开发）", Toast.LENGTH_SHORT).show()
+                showSearch = true
             }
             FloatAction(Icons.Default.Details, "详细") {
                 Toast.makeText(context, "当前共 ${points.size} 个轨迹点", Toast.LENGTH_SHORT).show()
@@ -285,8 +280,29 @@ fun MainScreen() {
             context = context,
             vm = vm,
             current = currentRange,
-            onSelect = { currentRange = it; vm.load(it) },
+            onSelect = { range ->
+                if (range == QueryRange.CUSTOM) {
+                    currentRange = range
+                    showCustomDatePicker(context, vm)
+                } else {
+                    currentRange = range; vm.load(range)
+                }
+            },
             modifier = Modifier.align(Alignment.BottomCenter)
+        )
+    }
+
+    if (showSearch) {
+        SearchDialog(
+            onDismiss = { showSearch = false },
+            onResult = { lat, lon, name ->
+                val mv = mapRef.value
+                if (mv != null) {
+                    mv.controller.animateTo(GeoPoint(lat, lon))
+                    mv.controller.setZoom(14.0)
+                }
+                Toast.makeText(context, "已定位到：", Toast.LENGTH_SHORT).show()
+            }
         )
     }
 
@@ -297,7 +313,8 @@ fun MainScreen() {
                 PlaceStore(context).addAt(lat, lon, radius, name)
                 Toast.makeText(context, "已添加常去地点", Toast.LENGTH_SHORT).show()
             },
-            points = points
+            points = points,
+            onTileChange = { key -> tileKey = key }
         )
     }
 }
@@ -350,11 +367,11 @@ fun BottomRangeBar(
 
 @SuppressLint("MissingPermission")
 @Composable
-fun MapViewCompose(points: List<TrackPoint>, fitAll: Boolean) {
+fun MapViewCompose(points: List<TrackPoint>, fitAll: Boolean, tileKey: String, mapRef: androidx.compose.runtime.MutableState<org.osmdroid.views.MapView?>) {
     val context = LocalContext.current
-    val mapView = remember {
+    val mapView = remember(tileKey) {
         MapView(context).apply {
-            setTileSource(LifeTraceApp.amapTileSource())
+            setTileSource(if (tileKey == "amap") LifeTraceApp.amapTileSource() else LifeTraceApp.osmTileSource())
             setMultiTouchControls(true)
             setBackgroundColor(android.graphics.Color.WHITE)
             minZoomLevel = 3.0
@@ -362,13 +379,14 @@ fun MapViewCompose(points: List<TrackPoint>, fitAll: Boolean) {
         }
     }
     var lastFit by remember { mutableStateOf(0) }
-    LaunchedEffect(Unit) {
+    LaunchedEffect(tileKey) {
         mapView.controller.setZoom(6.0)
     }
     AndroidView(
         factory = { mapView },
         modifier = Modifier.fillMaxSize(),
         update = { mv ->
+            mapRef.value = mv
             mv.overlays.clear()
             if (points.isNotEmpty()) {
                 val line = Polyline().apply {
@@ -470,7 +488,7 @@ private fun exportAll(context: Context, points: List<TrackPoint>) {
 
 /** 设置页：WebDAV 配置 + 常去地点管理 + 省电暂停 + 自动开始 */
 @Composable
-fun SettingsDialog(onDismiss: () -> Unit, onAddPlace: (Double, Double, Double, String) -> Unit, points: List<TrackPoint>) {
+fun SettingsDialog(onDismiss: () -> Unit, onAddPlace: (Double, Double, Double, String) -> Unit, points: List<TrackPoint>, onTileChange: (String) -> Unit) {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("lifetrace", Context.MODE_PRIVATE) }
     val syncScope = rememberCoroutineScope()
@@ -479,6 +497,7 @@ fun SettingsDialog(onDismiss: () -> Unit, onAddPlace: (Double, Double, Double, S
     var webdavUser by remember { mutableStateOf(prefs.getString("webdav_user", "") ?: "") }
     var webdavPass by remember { mutableStateOf(prefs.getString("webdav_pass", "") ?: "") }
     var autoStart by remember { mutableStateOf(prefs.getBoolean("auto_start", true)) }
+    var mapTile by remember { mutableStateOf(prefs.getString("map_tile", "osm") ?: "osm") }
 
     var zoneEnabled by remember { mutableStateOf(prefs.getBoolean("pause_zone_enabled", false)) }
     val placeStore = remember { PlaceStore(context) }
@@ -500,6 +519,24 @@ fun SettingsDialog(onDismiss: () -> Unit, onAddPlace: (Double, Double, Double, S
                 Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.clickable { autoStart = !autoStart }) {
                     Checkbox(checked = autoStart, onCheckedChange = { autoStart = it })
                     Text("打开软件自动开始记录")
+                }
+                Spacer(Modifier.height(10.dp))
+                Text("地图源", fontWeight = FontWeight.Bold, color = AccentRed)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    listOf("osm" to "全球(OSM)", "amap" to "国内(高德)").forEach { (key, label) ->
+                        val sel = mapTile == key
+                        Text(
+                            label,
+                            modifier = Modifier
+                                .padding(end = 8.dp)
+                                .clip(RoundedCornerShape(16.dp))
+                                .clickable { mapTile = key; onTileChange(key) }
+                                .background(if (sel) AccentRed else Color(0xFFEEEEEE), RoundedCornerShape(16.dp))
+                                .padding(horizontal = 12.dp, vertical = 6.dp),
+                            color = if (sel) Color.White else Color(0xFF555555),
+                            fontSize = 13.sp
+                        )
+                    }
                 }
 
                 // ---- WebDAV 同步 ----
@@ -557,16 +594,24 @@ fun SettingsDialog(onDismiss: () -> Unit, onAddPlace: (Double, Double, Double, S
                 }
                 if (!adding) {
                     TextButton(onClick = {
-                        // 定位当前位置并加入常去地点
+                        // 获取当前最新位置（getCurrentLocation 比 lastLocation 更可靠）并加入常去地点
                         try {
-                            fusedClient.lastLocation.addOnSuccessListener { loc: Location? ->
-                                if (loc != null) {
-                                    onAddPlace(loc.latitude, loc.longitude, 200.0, "")
-                                    places = placeStore.all()
-                                } else {
-                                    Toast.makeText(context, "暂未获取到定位，请稍后重试", Toast.LENGTH_SHORT).show()
+                            val req = com.google.android.gms.location.CurrentLocationRequest.Builder()
+                                .setPriority(com.google.android.gms.location.Priority.PRIORITY_HIGH_ACCURACY)
+                                .setDurationMillis(10000)
+                                .build()
+                            fusedClient.getCurrentLocation(req, null)
+                                .addOnSuccessListener { loc: Location? ->
+                                    if (loc != null) {
+                                        onAddPlace(loc.latitude, loc.longitude, 200.0, "")
+                                        places = placeStore.all()
+                                        Toast.makeText(context, "已添加常去地点", Toast.LENGTH_SHORT).show()
+                                    } else {
+                                        Toast.makeText(context, "暂未获取到定位，请稍后重试", Toast.LENGTH_SHORT).show()
+                                    }
+                                }.addOnFailureListener {
+                                    Toast.makeText(context, "定位失败：${it.message}", Toast.LENGTH_SHORT).show()
                                 }
-                            }
                         } catch (e: Exception) {
                             Toast.makeText(context, "定位失败：${e.message}", Toast.LENGTH_SHORT).show()
                         }
@@ -587,11 +632,21 @@ fun SettingsDialog(onDismiss: () -> Unit, onAddPlace: (Double, Double, Double, S
         },
         confirmButton = {
             TextButton(onClick = {
+                // WebDAV 地址校验：非空时须 http/https 开头，提示建议 https（密码明文传输风险）
+                val url = webdavUrl.trim()
+                if (url.isNotBlank() && !url.startsWith("http://") && !url.startsWith("https://")) {
+                    Toast.makeText(context, "WebDAV 地址需以 http:// 或 https:// 开头", Toast.LENGTH_SHORT).show()
+                    return@TextButton
+                }
+                if (url.startsWith("http://")) {
+                    Toast.makeText(context, "提示：http 明文传输密码不安全，建议使用 https", Toast.LENGTH_LONG).show()
+                }
                 prefs.edit()
-                    .putString("webdav_url", webdavUrl)
+                    .putString("webdav_url", url)
                     .putString("webdav_user", webdavUser)
                     .putString("webdav_pass", webdavPass)
                     .putBoolean("auto_start", autoStart)
+                    .putString("map_tile", mapTile)
                     .putBoolean("pause_zone_enabled", zoneEnabled)
                     .putBoolean("pause_wifi_enabled", wifiEnabled)
                     .putString("pause_wifi_ssid", wifiSsid)
@@ -602,4 +657,131 @@ fun SettingsDialog(onDismiss: () -> Unit, onAddPlace: (Double, Double, Double, S
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } }
     )
+}
+
+/** 自定义日期：让用户依次选「起始日」「结束日」，然后据此筛选轨迹 */
+private fun showCustomDatePicker(context: Context, vm: MainViewModel) {
+    val cal = Calendar.getInstance()
+    DatePickerDialog(
+        context,
+        { _, year, month, day ->
+            val startCal = Calendar.getInstance().apply {
+                set(year, month, day, 0, 0, 0); set(Calendar.MILLISECOND, 0)
+            }
+            val startMs = startCal.timeInMillis
+            val endDialog = DatePickerDialog(
+                context,
+                { _, ey, em, ed ->
+                    val end = Calendar.getInstance().apply {
+                        set(ey, em, ed, 23, 59, 59); set(Calendar.MILLISECOND, 0)
+                    }
+                    if (end.timeInMillis < startMs) {
+                        Toast.makeText(context, "结束日期不能早于起始日期", Toast.LENGTH_SHORT).show()
+                    } else {
+                        vm.loadCustom(startMs, end.timeInMillis)
+                        Toast.makeText(context, "已按所选日期加载", Toast.LENGTH_SHORT).show()
+                    }
+                },
+                cal.get(Calendar.YEAR), cal.get(Calendar.MONTH), cal.get(Calendar.DAY_OF_MONTH)
+            )
+            endDialog.datePicker.minDate = startMs
+            endDialog.show()
+        },
+        cal.get(Calendar.YEAR), cal.get(Calendar.MONTH), cal.get(Calendar.DAY_OF_MONTH)
+    ).show()
+}
+
+@SuppressLint("MissingPermission")
+private fun locateToCurrent(
+    context: Context,
+    mapRef: androidx.compose.runtime.MutableState<org.osmdroid.views.MapView?>
+) {
+    try {
+        val fused = LocationServices.getFusedLocationProviderClient(context)
+        fused.lastLocation.addOnSuccessListener { loc: Location? ->
+            val target = loc ?: return@addOnSuccessListener
+            val mv = mapRef.value ?: return@addOnSuccessListener
+            mv.controller.animateTo(GeoPoint(target.latitude, target.longitude))
+            mv.controller.setZoom(16.0)
+            Toast.makeText(context, "已定位到当前位置", Toast.LENGTH_SHORT).show()
+        }.addOnFailureListener {
+            Toast.makeText(context, "定位失败：${it.message}", Toast.LENGTH_SHORT).show()
+        }
+    } catch (e: Exception) {
+        Toast.makeText(context, "定位异常：${e.message}", Toast.LENGTH_SHORT).show()
+    }
+}
+
+/** 搜索对话框：输入地名，用 Nominatim(OpenStreetMap 海外可用) 解析坐标 */
+@Composable
+fun SearchDialog(onDismiss: () -> Unit, onResult: (Double, Double, String) -> Unit) {
+    val context = LocalContext.current
+    var query by remember { mutableStateOf("") }
+    var loading by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf("") }
+    val scope = rememberCoroutineScope()
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("搜索地点", fontWeight = FontWeight.Bold) },
+        text = {
+            Column {
+                OutlinedTextField(
+                    value = query, onValueChange = { query = it },
+                    label = { Text("输入地名（如：河内 / Ha Noi / 潍坊）") },
+                    singleLine = true, modifier = Modifier.fillMaxWidth()
+                )
+                if (error.isNotBlank()) {
+                    Spacer(Modifier.height(6.dp))
+                    Text(error, color = AccentRed, fontSize = 12.sp)
+                }
+                if (loading) {
+                    Spacer(Modifier.height(8.dp))
+                    Text("正在搜索…", fontSize = 12.sp, color = Color(0xFF666666))
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                val q = query.trim()
+                if (q.isBlank()) { error = "请输入地名"; return@TextButton }
+                loading = true; error = ""
+                scope.launch {
+                    val r = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                        searchPlace(q)
+                    }
+                    loading = false
+                    if (r == null) {
+                        error = "未找到该地点，请换个关键词"
+                    } else {
+                        onResult(r.first, r.second, r.third)
+                        onDismiss()
+                    }
+                }
+            }) { Text("搜索", color = AccentRed) }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } }
+    )
+}
+
+/** 调用 Nominatim 搜索，返回 (lat, lon, displayName) 或 null */
+private fun searchPlace(query: String): Triple<Double, Double, String>? {
+    return try {
+        val url = java.net.URL(
+            "https://nominatim.openstreetmap.org/search?format=json&limit=1&q=" +
+                    java.net.URLEncoder.encode(query, "UTF-8")
+        )
+        val conn = url.openConnection() as java.net.HttpURLConnection
+        conn.connectTimeout = 15000
+        conn.readTimeout = 15000
+        conn.setRequestProperty("User-Agent", "LifeTrace/1.0 (Android)")
+        val body = conn.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+        // 解析第一个结果的 lat / lon / display_name（不引入额外 JSON 依赖）
+        val lat = Regex("\"lat\":\"([-0-9.]+)\"").find(body)?.groupValues?.get(1)?.toDoubleOrNull()
+        val lon = Regex("\"lon\":\"([-0-9.]+)\"").find(body)?.groupValues?.get(1)?.toDoubleOrNull()
+        val name = Regex("\"display_name\":\"([^\"]+)\"").find(body)?.groupValues?.get(1) ?: query
+        if (lat != null && lon != null) Triple(lat, lon, name) else null
+    } catch (e: Exception) {
+        null
+    }
 }

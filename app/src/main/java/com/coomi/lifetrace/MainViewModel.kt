@@ -9,6 +9,8 @@ import com.coomi.lifetrace.data.TrackPoint
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.Dispatchers
 import java.util.Calendar
 
 class MainViewModel(app: Application) : AndroidViewModel(app) {
@@ -34,9 +36,28 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             val data = if (range == QueryRange.LIFE)
                 dao.all() else dao.between(from, to)
             // 大范围（如"一生"）数据量可达几十万点，全量渲染一条Polyline会卡顿/OOM。
-            // 用全量算统计（精确），渲染点降采样到 ≤3000。
-            _stats.value = computeStats(data)
-            _points.value = downsample(data, 3000)
+            // 统计（逐点haversine）和降采样都是CPU密集循环，挪到后台线程避免卡主线程/ANR。
+            val result = withContext(Dispatchers.Default) {
+                val stats = computeStats(data)
+                val pts = downsample(data, 3000)
+                stats to pts
+            }
+            _stats.value = result.first
+            _points.value = result.second
+        }
+    }
+
+    /** 加载自定义时间范围内的轨迹（根据用户挑选的起止日期） */
+    fun loadCustom(startMs: Long, endMs: Long) {
+        viewModelScope.launch {
+            val data = dao.between(startMs, endMs)
+            val result = withContext(Dispatchers.Default) {
+                val stats = computeStats(data)
+                val pts = downsample(data, 3000)
+                stats to pts
+            }
+            _stats.value = result.first
+            _points.value = result.second
         }
     }
 

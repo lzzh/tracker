@@ -13,8 +13,17 @@ class LifeTraceApp : Application() {
     }
 
     companion object {
-        /** 生成一个国内可访问的在线瓦片源（高德 road 瓦片，无需 key，覆盖全球）。
-         *  解决默认 OpenStreetMap 瓦片服务器在国内访问超时导致地图空白的问题。 */
+        /** OpenStreetMap 瓦片（海外/全球可访问，默认），国内访问可能超时 */
+        fun osmTileSource(): XYTileSource = XYTileSource(
+            "OpenStreetMap",
+            3, 19, 256, ".png",
+            arrayOf(
+                "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+            ),
+            "© OpenStreetMap"
+        )
+
+        /** 高德 road 瓦片（国内可访问，无需 key），海外（如越南）访问不通 */
         fun amapTileSource(): XYTileSource = XYTileSource(
             "amap",
             3, 19, 256, ".png",

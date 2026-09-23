@@ -18,6 +18,9 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <!-- Android 13+ 读取当前 Wi-Fi SSID 需要（配合定位权限判断连接了哪个 WiFi） -->
+    <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES"
+        android:usesPermissionFlags="neverForLocation" />
 
     <!-- 存储(导入导出) -->
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
