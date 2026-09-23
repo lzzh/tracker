@@ -139,7 +139,8 @@ class LocationTrackingService : Service() {
     /** 进入省电暂停：下调定位优先级到低频（省电），不落点，通知提示已暂停 */
     private fun enterPause() {
         isPaused = true
-        pauseController.reset()
+        // 不 reset()：保留静止基线（stillCount/lastLat/lastLon），
+        // 避免暂停后首个低频样本被误判为"移动"而立即恢复 → 造成"暂停-恢复"振荡。
         try {
             val lowReq = LocationRequest.Builder(Priority.PRIORITY_LOW_POWER, 600000L)
                 .setMinUpdateIntervalMillis(600000L)
@@ -149,7 +150,7 @@ class LocationTrackingService : Service() {
         updateNotification("已暂停记录（静止/区域/Wi-Fi）")
     }
 
-    /** 退出暂停：恢复高精度记录 */
+    /** 退出暂停：恢复高精度记录（此时已检测到用户移动，重置静止计数合理） */
     private fun exitPause() {
         isPaused = false
         pauseController.reset()
