@@ -25,6 +25,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
@@ -155,7 +156,7 @@ fun RangeButton(label: String, range: QueryRange, current: QueryRange, onSelect:
 }
 
 @Composable
-fun MapViewCompose(points: List<com.coomi.lifetrace.data.TrackPoint>) {
+fun ColumnScope.MapViewCompose(points: List<com.coomi.lifetrace.data.TrackPoint>) {
     val context = LocalContext.current
     // MapView 在 factory 里创建（此时组件树已挂载，MapView 初始化完成），
     // 避免在 remember 初始化块中对尚未 attach 的 MapView 调用 setZoom/setCenter 触发潜在 NPE。
