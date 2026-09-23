@@ -16,6 +16,8 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -56,6 +58,7 @@ fun MainScreen(vm: MainViewModel = viewModel()) {
     val tracking by vm.tracking.collectAsState()
     val totalCount by vm.totalCount.collectAsState()
     var currentRange by remember { mutableStateOf<QueryRange>(QueryRange.LIFE) }
+    var showSettings by remember { mutableStateOf(false) }
 
     val permLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -146,6 +149,10 @@ fun MainScreen(vm: MainViewModel = viewModel()) {
             )
         }
     }
+
+    if (showSettings) {
+        SettingsDialog(onDismiss = { showSettings = false })
+    }
 }
 
 @Composable
@@ -232,4 +239,69 @@ private fun exportAll(context: Context, points: List<com.coomi.lifetrace.data.Tr
     }
     val f = GeoJsonIO.writeExportFile(context, points, "life-trace")
     Toast.makeText(context, "已导出到 ${f.absolutePath}", Toast.LENGTH_LONG).show()
+}
+
+/** 智能暂停设置：静止 / 地点范围 / WiFi */
+@Composable
+fun SettingsDialog(onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    val prefs = remember { context.getSharedPreferences("lifetrace", Context.MODE_PRIVATE) }
+
+    var zoneEnabled by remember { mutableStateOf(prefs.getBoolean("pause_zone_enabled", false)) }
+    var zoneLat by remember { mutableStateOf(prefs.getFloat("pause_zone_lat", 0f).toString()) }
+    var zoneLon by remember { mutableStateOf(prefs.getFloat("pause_zone_lon", 0f).toString()) }
+    var zoneRadius by remember { mutableStateOf(prefs.getFloat("pause_zone_radius", 200f).toString()) }
+    var wifiEnabled by remember { mutableStateOf(prefs.getBoolean("pause_wifi_enabled", false)) }
+    var wifiSsid by remember { mutableStateOf(prefs.getString("pause_wifi_ssid", "") ?: "") }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("省电暂停设置") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                Text("规则命中时自动暂停记录以省电，离开后自动恢复。", style = MaterialTheme.typography.body2)
+
+                // ---- 地点范围 ----
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(checked = zoneEnabled, onCheckedChange = { zoneEnabled = it })
+                    Text("进入指定地点范围时暂停")
+                }
+                if (zoneEnabled) {
+                    OutlinedTextField(value = zoneLat, onValueChange = { zoneLat = it },
+                        label = { Text("纬度") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                    OutlinedTextField(value = zoneLon, onValueChange = { zoneLon = it },
+                        label = { Text("经度") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                    OutlinedTextField(value = zoneRadius, onValueChange = { zoneRadius = it },
+                        label = { Text("半径(米)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                }
+
+                // ---- WiFi ----
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(checked = wifiEnabled, onCheckedChange = { wifiEnabled = it })
+                    Text("连接指定WiFi时暂停")
+                }
+                if (wifiEnabled) {
+                    OutlinedTextField(value = wifiSsid, onValueChange = { wifiSsid = it },
+                        label = { Text("WiFi SSID") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                prefs.edit()
+                    .putBoolean("pause_zone_enabled", zoneEnabled)
+                    .putFloat("pause_zone_lat", zoneLat.toFloatOrNull() ?: 0f)
+                    .putFloat("pause_zone_lon", zoneLon.toFloatOrNull() ?: 0f)
+                    .putFloat("pause_zone_radius", zoneRadius.toFloatOrNull() ?: 200f)
+                    .putBoolean("pause_wifi_enabled", wifiEnabled)
+                    .putString("pause_wifi_ssid", wifiSsid)
+                    .apply()
+                Toast.makeText(context, "已保存省电设置", Toast.LENGTH_SHORT).show()
+                onDismiss()
+            }) { Text("保存") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("取消") }
+        }
+    )
 }

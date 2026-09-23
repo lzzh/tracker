@@ -35,6 +35,8 @@ class LocationTrackingService : Service() {
     private lateinit var fusedClient: FusedLocationProviderClient
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var callback: LocationCallback? = null
+    private lateinit var pauseController: PauseController
+    private var isPaused = false
 
     companion object {
         const val CHANNEL_ID = "location_tracking"
@@ -59,6 +61,7 @@ class LocationTrackingService : Service() {
         createChannel()
         startForegroundWithNotification()
         fusedClient = LocationServices.getFusedLocationProviderClient(this)
+        pauseController = PauseController(this)
         startLocationUpdates()
     }
 
@@ -107,6 +110,7 @@ class LocationTrackingService : Service() {
     }
 
     private fun startLocationUpdates() {
+        // 高精度：正常记录时用
         val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 5000L)
             .setMinUpdateIntervalMillis(3000L)
             .setMaxUpdateDelayMillis(10000L)
@@ -114,18 +118,67 @@ class LocationTrackingService : Service() {
         val cb = object : LocationCallback() {
             override fun onLocationResult(result: LocationResult) {
                 val loc: Location = result.lastLocation ?: return
-                persist(loc)
+                // 智能暂停判定：静止 / 进指定范围 / 连上指定WiFi → 省电暂停记录
+                val shouldPause = pauseController.shouldPause(loc)
+                if (shouldPause) {
+                    if (!isPaused) enterPause()
+                } else {
+                    if (isPaused) exitPause()
+                    persist(loc)
+                }
             }
         }
         callback = cb
-        // 若后台间隔过大，也允许低速更新兜底
-        val lr = LocationRequest.Builder(Priority.PRIORITY_BALANCED_POWER_ACCURACY, 30000L)
-            .build()
         try {
             fusedClient.requestLocationUpdates(request, cb, Looper.getMainLooper())
         } catch (e: SecurityException) {
             // 无权限时静默，等用户授权
         }
+    }
+
+    /** 进入省电暂停：下调定位优先级到低频（省电），不落点，通知提示已暂停 */
+    private fun enterPause() {
+        isPaused = true
+        pauseController.reset()
+        try {
+            val lowReq = LocationRequest.Builder(Priority.PRIORITY_LOW_POWER, 600000L)
+                .setMinUpdateIntervalMillis(600000L)
+                .build()
+            callback?.let { fusedClient.requestLocationUpdates(lowReq, it, Looper.getMainLooper()) }
+        } catch (e: SecurityException) { }
+        updateNotification("已暂停记录（静止/区域/Wi-Fi）")
+    }
+
+    /** 退出暂停：恢复高精度记录 */
+    private fun exitPause() {
+        isPaused = false
+        pauseController.reset()
+        try {
+            val highReq = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 5000L)
+                .setMinUpdateIntervalMillis(3000L)
+                .setMaxUpdateDelayMillis(10000L)
+                .build()
+            callback?.let { fusedClient.requestLocationUpdates(highReq, it, Looper.getMainLooper()) }
+        } catch (e: SecurityException) { }
+        updateNotification("正在记录你的位置轨迹…")
+    }
+
+    private fun updateNotification(text: String) {
+        val pi = PendingIntent.getActivity(
+            this, 0, Intent(this, MainActivity::class.java),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+        val notification: Notification = Notification.Builder(this, CHANNEL_ID)
+            .setContentTitle("一生足迹")
+            .setContentText(text)
+            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setOngoing(true)
+            .setContentIntent(pi)
+            .build()
+        try {
+            val nm = getSystemService(NotificationManager::class.java)
+            nm.notify(NOTIFICATION_ID, notification)
+        } catch (e: Exception) { }
     }
 
     private fun persist(loc: Location) {
