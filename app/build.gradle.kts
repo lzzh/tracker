@@ -59,8 +59,6 @@ dependencies {
 
     // 地图：OSMDroid
     implementation("org.osmdroid:osmdroid-android:6.1.18")
-    implementation("org.osmdroid:osmdroid-mapsforge:6.1.18")
-    implementation("org.osmdroid:osmdroid-geopackage:6.1.18")
 
     // 数据库
     implementation("androidx.room:room-runtime:2.6.1")
