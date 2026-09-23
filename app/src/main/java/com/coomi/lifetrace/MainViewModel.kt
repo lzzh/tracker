@@ -33,8 +33,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             val (from, to) = range.bounds()
             val data = if (range == QueryRange.LIFE)
                 dao.all() else dao.between(from, to)
-            _points.value = data
+            // 大范围（如"一生"）数据量可达几十万点，全量渲染一条Polyline会卡顿/OOM。
+            // 用全量算统计（精确），渲染点降采样到 ≤3000。
             _stats.value = computeStats(data)
+            _points.value = downsample(data, 3000)
         }
     }
 
@@ -154,4 +156,18 @@ private fun haversine(a: com.coomi.lifetrace.data.TrackPoint, b: com.coomi.lifet
             Math.cos(la1) * Math.cos(la2) *
             Math.sin(dLon / 2) * Math.sin(dLon / 2)
     return 2 * r * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h))
+}
+
+/** 等间隔降采样：保留首尾点，其余按 step 抽稀，用于大范围渲染避免卡顿 */
+private fun downsample(points: List<com.coomi.lifetrace.data.TrackPoint>, max: Int): List<com.coomi.lifetrace.data.TrackPoint> {
+    if (points.size <= max) return points
+    val step = points.size.toDouble() / max
+    val out = ArrayList<com.coomi.lifetrace.data.TrackPoint>(max + 2)
+    var i = 0.0
+    while (i < points.size) {
+        out.add(points[i.toInt()])
+        i += step
+    }
+    if (out.last() != points.last()) out.add(points.last())
+    return out
 }

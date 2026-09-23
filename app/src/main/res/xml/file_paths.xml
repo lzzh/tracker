@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <paths>
-    <external-path name="external" path="." />
+    <!-- 仅暴露 app 专属外部目录下的 exports 子目录（轨迹导出文件），不放开整个外部存储根 -->
+    <external-files-path name="exports" path="exports/" />
     <files-path name="files" path="." />
     <cache-path name="cache" path="." />
 </paths>

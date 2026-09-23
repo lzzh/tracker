@@ -38,6 +38,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
+import kotlinx.coroutines.launch
 import com.coomi.lifetrace.data.GeoJsonIO
 import com.coomi.lifetrace.data.PlaceStore
 import com.coomi.lifetrace.data.TrackPoint
@@ -95,13 +96,32 @@ fun MainScreen() {
     var currentRange by remember { mutableStateOf<QueryRange>(QueryRange.DAY) }
     var showSettings by remember { mutableStateOf(false) }
 
+    // --- 权限：Android 11+ 要求先请求前台定位，再单独二次请求后台定位 ---
+    val bgLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { result ->
+        // 无论后台是否授权，拿到前台权限就启动记录（后台拿不到只影响保活）
+        if (result.values.all { it }) {
+            requestIgnoreBattery(context)
+        }
+        startTracking(context, vm)
+    }
+
     val permLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { result ->
-        if (result.values.all { it }) {
+        val allGranted = result.values.all { it }
+        if (allGranted) {
             requestIgnoreBattery(context)
-            LocationTrackingService.start(context)
-            vm.setTracking(true)
+            // 二次请求后台定位权限（Android 11+ 必须单独弹窗）
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val bgGranted = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_BACKGROUND_LOCATION) == PackageManager.PERMISSION_GRANTED
+                if (!bgGranted) {
+                    bgLauncher.launch(arrayOf(Manifest.permission.ACCESS_BACKGROUND_LOCATION))
+                    return@rememberLauncherForActivityResult
+                }
+            }
+            startTracking(context, vm)
         } else {
             Toast.makeText(context, "需要定位权限才能记录轨迹", Toast.LENGTH_LONG).show()
         }
@@ -115,23 +135,7 @@ fun MainScreen() {
         val auto = context.getSharedPreferences("lifetrace", Context.MODE_PRIVATE)
             .getBoolean("auto_start", true)
         if (auto && !vm.tracking.value) {
-            val allPerms = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
-                arrayOf(
-                    Manifest.permission.ACCESS_FINE_LOCATION,
-                    Manifest.permission.ACCESS_COARSE_LOCATION,
-                    Manifest.permission.ACCESS_BACKGROUND_LOCATION
-                )
-            else arrayOf(
-                Manifest.permission.ACCESS_FINE_LOCATION,
-                Manifest.permission.ACCESS_COARSE_LOCATION
-            )
-            if (hasAll(context, allPerms)) {
-                requestIgnoreBattery(context)
-                LocationTrackingService.start(context)
-                vm.setTracking(true)
-            } else {
-                permLauncher.launch(allPerms)
-            }
+            requestAndStart(context, vm, permLauncher)
         }
     }
 
@@ -213,6 +217,7 @@ fun MainScreen() {
                 Toast.makeText(context, "定位已居中", Toast.LENGTH_SHORT).show()
             }
             FloatAction(Icons.Default.Settings, "配置") { showSettings = true }
+            FloatAction(Icons.Default.Share, "导出") { exportAll(context, points) }
             FloatAction(Icons.Default.Search, "搜索") {
                 Toast.makeText(context, "搜索地点（待开发）", Toast.LENGTH_SHORT).show()
             }
@@ -248,32 +253,16 @@ fun MainScreen() {
 
         // ---- 右上：开始/停止记录按钮 ----
         Button(
-            onClick = {
-                val allPerms = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
-                    arrayOf(
-                        Manifest.permission.ACCESS_FINE_LOCATION,
-                        Manifest.permission.ACCESS_COARSE_LOCATION,
-                        Manifest.permission.ACCESS_BACKGROUND_LOCATION
-                    )
-                else arrayOf(
-                    Manifest.permission.ACCESS_FINE_LOCATION,
-                    Manifest.permission.ACCESS_COARSE_LOCATION
-                )
-                if (hasAll(context, allPerms)) {
+                onClick = {
                     if (tracking) {
                         LocationTrackingService.stop(context)
                         vm.setTracking(false)
                         Toast.makeText(context, "已停止记录", Toast.LENGTH_SHORT).show()
                     } else {
-                        requestIgnoreBattery(context)
-                        LocationTrackingService.start(context)
-                        vm.setTracking(true)
+                        requestAndStart(context, vm, permLauncher)
                         Toast.makeText(context, "开始记录轨迹", Toast.LENGTH_SHORT).show()
                     }
-                } else {
-                    permLauncher.launch(allPerms)
-                }
-            },
+                },
             colors = ButtonDefaults.buttonColors(
                 backgroundColor = if (tracking) Color(0xFFC62828) else Color(0xFF05C755),
                 contentColor = Color.White
@@ -307,7 +296,8 @@ fun MainScreen() {
             onAddPlace = { lat, lon, radius, name ->
                 PlaceStore(context).addAt(lat, lon, radius, name)
                 Toast.makeText(context, "已添加常去地点", Toast.LENGTH_SHORT).show()
-            }
+            },
+            points = points
         )
     }
 }
@@ -418,6 +408,33 @@ fun MapViewCompose(points: List<TrackPoint>, fitAll: Boolean) {
 private fun hasAll(context: Context, perms: Array<String>): Boolean =
     perms.all { ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED }
 
+/** 前台 + 后台定位权限都已拿到才直接启动；否则弹前台权限框 */
+private fun requestAndStart(
+    context: Context,
+    vm: MainViewModel,
+    launcher: androidx.activity.result.ActivityResultLauncher<Array<String>>
+) {
+    val fg = arrayOf(
+        Manifest.permission.ACCESS_FINE_LOCATION,
+        Manifest.permission.ACCESS_COARSE_LOCATION
+    )
+    val bgNeeded = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_BACKGROUND_LOCATION) != PackageManager.PERMISSION_GRANTED
+    val need = if (bgNeeded) fg + Manifest.permission.ACCESS_BACKGROUND_LOCATION else fg
+    if (hasAll(context, fg)) {
+        startTracking(context, vm)
+    } else {
+        launcher.launch(fg)
+    }
+}
+
+/** 真正启动轨迹服务并更新状态 */
+private fun startTracking(context: Context, vm: MainViewModel) {
+    requestIgnoreBattery(context)
+    LocationTrackingService.start(context)
+    vm.setTracking(true)
+}
+
 private fun requestIgnoreBattery(context: Context) {
     val pm = context.getSystemService(Context.POWER_SERVICE) as PowerManager
     if (!pm.isIgnoringBatteryOptimizations(context.packageName)) {
@@ -435,14 +452,28 @@ private fun exportAll(context: Context, points: List<TrackPoint>) {
         return
     }
     val f = GeoJsonIO.writeExportFile(context, points, "life-trace")
-    Toast.makeText(context, "已导出到 ${f.absolutePath}", Toast.LENGTH_LONG).show()
+    // 通过 FileProvider + ACTION_SEND 唤起分享面板
+    try {
+        val uri = androidx.core.content.FileProvider.getUriForFile(
+            context, context.packageName + ".fileprovider", f
+        )
+        val intent = Intent(Intent.ACTION_SEND).apply {
+            type = "application/json"
+            putExtra(Intent.EXTRA_STREAM, uri)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        context.startActivity(Intent.createChooser(intent, "导出轨迹"))
+    } catch (e: Exception) {
+        Toast.makeText(context, "已导出到 ${f.absolutePath}", Toast.LENGTH_LONG).show()
+    }
 }
 
 /** 设置页：WebDAV 配置 + 常去地点管理 + 省电暂停 + 自动开始 */
 @Composable
-fun SettingsDialog(onDismiss: () -> Unit, onAddPlace: (Double, Double, Double, String) -> Unit) {
+fun SettingsDialog(onDismiss: () -> Unit, onAddPlace: (Double, Double, Double, String) -> Unit, points: List<TrackPoint>) {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("lifetrace", Context.MODE_PRIVATE) }
+    val syncScope = rememberCoroutineScope()
 
     var webdavUrl by remember { mutableStateOf(prefs.getString("webdav_url", "") ?: "") }
     var webdavUser by remember { mutableStateOf(prefs.getString("webdav_user", "") ?: "") }
@@ -479,6 +510,29 @@ fun SettingsDialog(onDismiss: () -> Unit, onAddPlace: (Double, Double, Double, S
                 OutlinedTextField(value = webdavUser, onValueChange = { webdavUser = it }, label = { Text("账号") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                 Spacer(Modifier.height(8.dp))
                 OutlinedTextField(value = webdavPass, onValueChange = { webdavPass = it }, label = { Text("密码/应用密码") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                Spacer(Modifier.height(8.dp))
+                TextButton(onClick = {
+                    prefs.edit()
+                        .putString("webdav_url", webdavUrl)
+                        .putString("webdav_user", webdavUser)
+                        .putString("webdav_pass", webdavPass)
+                        .apply()
+                    if (points.isEmpty()) {
+                        Toast.makeText(context, "当前没有轨迹可同步", Toast.LENGTH_SHORT).show()
+                    } else {
+                        val sync = WebDavSync(context)
+                        if (!sync.isConfigured()) {
+                            Toast.makeText(context, "请先填写 WebDAV 地址", Toast.LENGTH_SHORT).show()
+                        } else {
+                            val appContext = context.applicationContext
+                            syncScope.launch {
+                                val ok = WebDavSync(appContext).syncRange(points, "life-trace")
+                                val msg = if (ok) "同步成功" else "同步失败，请检查地址/账号/密码"
+                                Toast.makeText(appContext, msg, Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    }
+                }) { Text("立即同步", color = AccentRed) }
 
                 // ---- 常去地点 ----
                 Spacer(Modifier.height(16.dp))

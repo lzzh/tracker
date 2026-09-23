@@ -118,6 +118,8 @@ class LocationTrackingService : Service() {
         val cb = object : LocationCallback() {
             override fun onLocationResult(result: LocationResult) {
                 val loc: Location = result.lastLocation ?: return
+                // 过滤粗定位点（accuracy>100m 说明 GPS 信号差，误差可能数百米，丢弃防跳变）
+                if (loc.accuracy > 100f) return
                 // 智能暂停判定：静止 / 进指定范围 / 连上指定WiFi → 省电暂停记录
                 val shouldPause = pauseController.shouldPause(loc)
                 if (shouldPause) {
@@ -132,7 +134,7 @@ class LocationTrackingService : Service() {
         try {
             fusedClient.requestLocationUpdates(request, cb, Looper.getMainLooper())
         } catch (e: SecurityException) {
-            // 无权限时静默，等用户授权
+            android.util.Log.w("LifeTrace", "定位更新失败（无权限）: " + e.message)
         }
     }
 
