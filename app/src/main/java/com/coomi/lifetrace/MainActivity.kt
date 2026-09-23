@@ -377,7 +377,13 @@ fun MapViewCompose(points: List<TrackPoint>, fitAll: Boolean, tileKey: String, m
     val context = LocalContext.current
     val mapView = remember(tileKey) {
         MapView(context).apply {
-            setTileSource(if (tileKey == "amap") LifeTraceApp.amapTileSource() else LifeTraceApp.osmTileSource())
+            setTileSource(
+                when (tileKey) {
+                    "amap" -> LifeTraceApp.amapTileSource()
+                    "osm_official" -> LifeTraceApp.osmTileSource()
+                    else -> LifeTraceApp.osmDeTileSource()   // 默认：德国 OSM 镜像（海外实测可用）
+                }
+            )
             setMultiTouchControls(true)
             setBackgroundColor(android.graphics.Color.WHITE)
             minZoomLevel = 3.0
@@ -579,7 +585,7 @@ fun SettingsDialog(onDismiss: () -> Unit, onAddPlace: (Double, Double, Double, S
                 Spacer(Modifier.height(10.dp))
                 Text("地图源", fontWeight = FontWeight.Bold, color = AccentRed)
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    listOf("osm" to "全球(OSM)", "amap" to "国内(高德)").forEach { (key, label) ->
+                    listOf("osm" to "OSM德国", "osm_official" to "OSM官方", "amap" to "高德").forEach { (key, label) ->
                         val sel = mapTile == key
                         Text(
                             label,

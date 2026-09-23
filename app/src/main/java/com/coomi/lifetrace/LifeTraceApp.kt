@@ -13,12 +13,28 @@ class LifeTraceApp : Application() {
     }
 
     companion object {
-        /** OpenStreetMap 瓦片（海外/全球可访问，默认），国内访问可能超时 */
+        /** OpenStreetMap 德国镜像（海外实测可用；OSM 官方在越南等地区常超时）。默认。 */
+        fun osmDeTileSource(): XYTileSource = XYTileSource(
+            "osm_de",
+            3, 19, 256, ".png",
+            arrayOf(
+                "https://tile.openstreetmap.de/{z}/{x}/{y}.png",
+                "https://a.tile.openstreetmap.de/{z}/{x}/{y}.png",
+                "https://b.tile.openstreetmap.de/{z}/{x}/{y}.png",
+                "https://c.tile.openstreetmap.de/{z}/{x}/{y}.png"
+            ),
+            "© OpenStreetMap"
+        )
+
+        /** OpenStreetMap 官方（部分海外/国内地区会超时，作为可选） */
         fun osmTileSource(): XYTileSource = XYTileSource(
             "OpenStreetMap",
             3, 19, 256, ".png",
             arrayOf(
-                "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+                "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+                "https://a.tile.openstreetmap.org/{z}/{x}/{y}.png",
+                "https://b.tile.openstreetmap.org/{z}/{x}/{y}.png",
+                "https://c.tile.openstreetmap.org/{z}/{x}/{y}.png"
             ),
             "© OpenStreetMap"
         )
