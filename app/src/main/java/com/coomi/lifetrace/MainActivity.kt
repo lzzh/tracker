@@ -820,24 +820,32 @@ fun SearchDialog(onDismiss: () -> Unit, onResult: (Double, Double, String) -> Un
     )
 }
 
+/** Nominatim 返回项（Gson 直接反序列化，避免正则解析不稳定） */
+private data class NominatimPlace(val lat: String, val lon: String, val display_name: String)
+
 /** 调用 Nominatim 搜索，返回 (lat, lon, displayName) 或 null */
 private fun searchPlace(query: String): Triple<Double, Double, String>? {
+    var conn: java.net.HttpURLConnection? = null
     return try {
         val url = java.net.URL(
             "https://nominatim.openstreetmap.org/search?format=json&limit=1&q=" +
                     java.net.URLEncoder.encode(query, "UTF-8")
         )
-        val conn = url.openConnection() as java.net.HttpURLConnection
+        conn = url.openConnection() as java.net.HttpURLConnection
         conn.connectTimeout = 15000
         conn.readTimeout = 15000
         conn.setRequestProperty("User-Agent", "LifeTrace/1.0 (Android)")
         val body = conn.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
-        // 解析第一个结果的 lat / lon / display_name（不引入额外 JSON 依赖）
-        val lat = Regex("\"lat\":\"([-0-9.]+)\"").find(body)?.groupValues?.get(1)?.toDoubleOrNull()
-        val lon = Regex("\"lon\":\"([-0-9.]+)\"").find(body)?.groupValues?.get(1)?.toDoubleOrNull()
-        val name = Regex("\"display_name\":\"([^\"]+)\"").find(body)?.groupValues?.get(1) ?: query
-        if (lat != null && lon != null) Triple(lat, lon, name) else null
+        val arr = com.google.gson.Gson().fromJson(
+            body, Array<NominatimPlace>::class.java
+        )
+        val first = arr?.firstOrNull() ?: return null
+        val lat = first.lat.toDoubleOrNull() ?: return null
+        val lon = first.lon.toDoubleOrNull() ?: return null
+        Triple(lat, lon, first.display_name.ifBlank { query })
     } catch (e: Exception) {
         null
+    } finally {
+        conn?.disconnect()
     }
 }

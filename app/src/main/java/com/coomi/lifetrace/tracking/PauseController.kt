@@ -3,6 +3,7 @@ package com.coomi.lifetrace.tracking
 import android.content.Context
 import android.location.Location
 import android.net.wifi.WifiManager
+import androidx.core.content.ContextCompat
 import com.coomi.lifetrace.data.PlaceStore
 import kotlin.math.abs
 
@@ -80,6 +81,11 @@ class PauseController(private val context: Context) {
 
     private fun isOnTargetWifi(): Boolean {
         return try {
+            // 读取真实 SSID 需要位置权限（Android 10+）。我们本就要求定位权限，
+            // 这里校验已授予才读取；未授予则跳过该规则，避免空跑。
+            val fineGranted = android.content.pm.PackageManager.PERMISSION_GRANTED ==
+                    ContextCompat.checkSelfPermission(context, android.Manifest.permission.ACCESS_FINE_LOCATION)
+            if (!fineGranted) return false
             val wifi = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
             val info = wifi.connectionInfo ?: return false
             val ssid = info.ssid?.trim('"') ?: ""
