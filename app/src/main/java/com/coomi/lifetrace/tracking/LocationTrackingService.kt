@@ -37,6 +37,7 @@ class LocationTrackingService : Service() {
     private var callback: LocationCallback? = null
     private lateinit var pauseController: PauseController
     private var isPaused = false
+    private var updatesStarted = false
 
     companion object {
         const val CHANNEL_ID = "location_tracking"
@@ -59,13 +60,18 @@ class LocationTrackingService : Service() {
     override fun onCreate() {
         super.onCreate()
         createChannel()
-        startForegroundWithNotification()
         fusedClient = LocationServices.getFusedLocationProviderClient(this)
         pauseController = PauseController(this)
-        startLocationUpdates()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // Android 12+ 要求 startForeground 必须在 onStartCommand 里调用，
+        // 放 onCreate 里会被系统拒绝并直接杀掉服务（导致没通知、不记录）。
+        startForegroundWithNotification()
+        if (!updatesStarted) {
+            startLocationUpdates()
+            updatesStarted = true
+        }
         return START_STICKY
     }
 
@@ -91,21 +97,26 @@ class LocationTrackingService : Service() {
     }
 
     private fun startForegroundWithNotification() {
-        val pi = PendingIntent.getActivity(
-            this, 0, Intent(this, MainActivity::class.java),
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
-        )
-        val notification: Notification = Notification.Builder(this, CHANNEL_ID)
-            .setContentTitle("一生足迹")
-            .setContentText("正在记录你的位置轨迹…")
-            .setSmallIcon(R.drawable.ic_launcher_foreground)
-            .setOngoing(true)
-            .setContentIntent(pi)
-            .build()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION)
-        } else {
-            startForeground(NOTIFICATION_ID, notification)
+        try {
+            val pi = PendingIntent.getActivity(
+                this, 0, Intent(this, MainActivity::class.java),
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+            )
+            val notification: Notification = Notification.Builder(this, CHANNEL_ID)
+                .setContentTitle("一生足迹")
+                .setContentText("正在记录你的位置轨迹…")
+                .setSmallIcon(R.drawable.ic_launcher_foreground)
+                .setOngoing(true)
+                .setContentIntent(pi)
+                .build()
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION)
+            } else {
+                startForeground(NOTIFICATION_ID, notification)
+            }
+            android.util.Log.d("LifeTrace", "前台服务已启动，通知已显示")
+        } catch (e: Exception) {
+            android.util.Log.e("LifeTrace", "启动前台服务失败: ${e.message}", e)
         }
     }
 

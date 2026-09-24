@@ -459,6 +459,7 @@ private fun requestTrackingChain(
     )
     // 1) 前台定位未授予 → 弹前台定位
     if (!hasAll(context, fg)) {
+        android.util.Log.d("LifeTrace", "权限链: 请求前台定位")
         fgLauncher.launch(fg)
         return
     }
@@ -466,6 +467,7 @@ private fun requestTrackingChain(
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
         ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_BACKGROUND_LOCATION) != PackageManager.PERMISSION_GRANTED
     ) {
+        android.util.Log.d("LifeTrace", "权限链: 请求后台定位")
         bgLauncher.launch(arrayOf(Manifest.permission.ACCESS_BACKGROUND_LOCATION))
         return
     }
@@ -473,10 +475,12 @@ private fun requestTrackingChain(
     if (Build.VERSION.SDK_INT >= 33 &&
         ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
     ) {
+        android.util.Log.d("LifeTrace", "权限链: 请求通知权限")
         notifLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
         return
     }
     // 4) 全部就绪 → 忽略电池优化 + 启动
+    android.util.Log.d("LifeTrace", "权限链: 全部就绪，直接启动")
     requestIgnoreBattery(context)
     startTracking(context, vm)
 }
@@ -513,6 +517,11 @@ private fun startTrackingIfReady(context: Context, vm: MainViewModel) {
 
 /** 真正启动轨迹服务并更新状态 */
 private fun startTracking(context: Context, vm: MainViewModel) {
+    // 诊断日志：启动前打印各权限状态，便于定位"不记录/没通知"
+    val fine = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION)
+    val bg = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+    val notif = ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS)
+    android.util.Log.d("LifeTrace", "startTracking: fine=$fine bg=$bg notif=$notif sdk=${Build.VERSION.SDK_INT}")
     requestIgnoreBattery(context)
     LocationTrackingService.start(context)
     vm.setTracking(true)
